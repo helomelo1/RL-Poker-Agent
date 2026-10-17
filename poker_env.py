@@ -1,3 +1,5 @@
+from unittest.case import skip
+
 import gymnasium as gym
 import numpy as np
 import rlcard
@@ -92,21 +94,30 @@ class PokerEnv(gym.Env):
         if seed is not None:
             self.game.seed(seed)
 
-        self.game.game.dealer_id = self.hand_number % 2
-        self.hand_number += 1
+        skipped_hands = 0
 
-        self.observation, self.player_id = self.game.reset()
+        while True:
+            self.game.game.dealer_id = self.hand_number % 2
+            self.hand_number += 1
+    
+            self.observation, self.player_id = self.game.reset()
+            self.button_id = (self.game.game.dealer_id + 1) % 2
+    
+            self._play_opponent_turns()
+    
+            if not self.game.is_over():
+                info = {
+                    "action_mask": self._legal_mask(),
+                    "skipped_hands": skipped_hands,
+                }
+                return self._encode_observation(), info
 
-        self.button_id = (self.game.game.dealer_id + 1) % 2
+            skipped_hands += 1
 
-        self._play_opponent_turns()
-
-        if self.game.is_over():
-            raise RuntimeError("Hand ended before the agent's first decision")
-
-        info = {"action_mask": self._legal_mask()}
-        return self._encode_observation(), info
-
+            if skipped_hands >= 100:
+                raise RuntimeError(
+                    "Opponent ended 100 consecutive hands before the agent acted"
+                )
 
     def step(self, action):
         action = int(action)
