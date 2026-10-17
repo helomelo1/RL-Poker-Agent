@@ -1,0 +1,145 @@
+import argparse
+import re
+
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+
+from opponents import CallingStation, RandomOpponent, RuleBasedOpponent
+import opponents
+from poker_env import PokerEnv
+from state import STATE_SIZE
+from train_ppo import ActorCritic, masked_distribution
+
+
+def evaluate(model, opponent, hands, seed):
+    env = PokerEnv(opponent_policy=opponent, seed=seed)
+    payoffs = []
+    skipped = 0
+
+    try:
+        for _ in range(hands):
+            observation, info = env.reset()
+            skipped += info.get("skipped_hands", 0)
+            done = False
+
+            while not done:
+                obs = torch.as_tensor(observation, dtype=torch.float32).unsqueeze(0)
+                mask = torch.as_tensor(info["action_mask"].astype(bool)).unsqueeze(0)
+
+                with torch.no_grad():
+                    logits, _ = model(obs)
+                    action = masked_distribution(logits, mask).sample().item()
+
+                observation, _, terminated, truncated, info = env.step(action)
+                if truncated:
+                    raise RuntimeError("Unexpected truncated hand")
+                done = terminated
+
+            payoffs.append(info["payoff_chips"])
+    finally:
+        env.close()
+
+    payoffs = np.asarray(payoffs, dtype=float)
+    return{
+        "average": payoffs.mean(),
+        "win_rate": np.mean(payoffs > 0),
+        "tie_rate": np.mean(payoffs == 0),
+        "skipped": skipped
+    }
+
+
+def training_history(path):
+    updates, average = [], []
+    pattern = re.compile(
+        r"Update\s+(\d+)/\d+.*avg chips/hand=\s*([+-]?\d+(?:\.\d+)?)"
+    )
+
+    with open(path) as log:
+        for line in log:
+            match = pattern.search(line)
+            if match:
+                updates.append(int(match.group(1)))
+                average.append(float(match.group(2)))
+
+    return np.asarray(updates), np.asarray(average)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--hands", type=int, default=1000)
+    parser.add_argument("--seed", type=int, default=2026)
+    args = parser.parse_args()
+
+    if args.hands < 1:
+        parser.error("--hands must be positive")
+
+    checkpoint = torch.load("poker_ppo.pt", map_location="cpu", weights_only=True)
+    if checkpoint["state_size"] != STATE_SIZE:
+        raise ValueError("Checkpoint and state encoder have different sizes")
+
+    model = ActorCritic()
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.eval()
+
+    opponents = [
+        CallingStation(),
+        RandomOpponent(seed=args.seed + 1),
+        RuleBasedOpponent(seed=args.seed + 2),
+    ]
+
+    names, chip_averages = [], []
+
+    for i, opponent in enumerate(opponents):
+        result = evaluate(model, opponent, args.hands, args.seed + i)
+        names.append(opponent.name)
+        chip_averages.append(result["average"])
+
+        print(
+            f"{opponent.name:16} "
+            f"avg={result['average']:+7.2f} chips/hand | "
+            f"win={result['win_rate']:.1%} | "
+            f"tie={result['tie_rate']:.1%} | "
+            f"evaluated={args.hands} | "
+            f"skipped={result['skipped']}"
+        )
+
+    updates, averages = training_history("train.log")
+    
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+    if len(updates):
+        axes[0].plot(updates, averages, alpha=0.3, label="Per update")
+        window = min(20, len(averages))
+        if len(averages) >= window:
+            rolling = np.convolve(
+                averages, np.ones(window) / window, mode="valid"
+            )
+            axes[0].plot(
+                updates[window - 1 :], rolling,
+                label=f"{window}-update moving average",
+            )
+        axes[0].legend()
+
+    axes[0].axhline(0, color="black", linewidth=0.8)
+    axes[0].set(
+        title="Training reward (mixed opponents)",
+        xlabel="PPO update",
+        ylabel="Average chips / hand",
+    )
+
+    axes[1].bar(names, chip_averages)
+    axes[1].axhline(0, color="black", linewidth=0.8)
+    axes[1].set(
+        title=f"Saved policy ({args.hands} fresh hands/opponent)",
+        ylabel="Average chips / hand",
+    )
+    axes[1].tick_params(axis="x", rotation=15)
+
+    fig.tight_layout()
+    fig.savefig("poker_results.png", dpi=160)
+    print("Saved plot to poker_results.png")
+
+
+if __name__ == "__main__":
+    main()
