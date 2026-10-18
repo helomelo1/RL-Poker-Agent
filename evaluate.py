@@ -65,6 +65,100 @@ def training_history(path):
     return np.asarray(updates), np.asarray(average)
 
 
+def hand_strength_grid(model, n_samples=50):
+    """
+    13x13 preflop hand chart showing raise frequency.
+    Upper triangle = suited, lower triangle = offsuit, diagonal = pairs
+    """
+    from state import encode_state
+    
+    RANKS = "AKQJT98765432"  # high to low (standard poker chart order)
+    grid = np.zeros((13, 13), dtype=float)
+
+    for i, r1 in enumerate(RANKS):
+        for j, r2 in enumerate(RANKS):
+            if i == j:
+                # pairs: e.g. AA, KK
+                hole_cards = [f"S{r1}", f"H{r1}"]
+            elif i < j:
+                # suited (upper triangle): e.g. AKs
+                hole_cards = [f"S{r1}", f"S{r2}"]
+            else:
+                # offsuit (lower triangle): e.g. AKo
+                hole_cards = [f"S{r1}", f"H{r2}"]
+
+            raise_count = 0
+            for _ in range(n_samples):
+                state = encode_state(
+                    hole_cards=hole_cards,
+                    community_cards=[],
+                    is_button=True,
+                    pot=3.0,
+                    my_chips=99.0,
+                    opponent_chips=98.0,
+                    to_call=1.0,
+                    starting_stack=100.0,
+                )
+                obs = torch.as_tensor(
+                    state, dtype=torch.float32
+                ).unsqueeze(0)
+                mask = torch.ones(5, dtype=torch.bool).unsqueeze(0)
+
+                with torch.no_grad():
+                    logits, _ = model(obs)
+                    dist = masked_distribution(logits, mask)
+                    action = dist.sample().item()
+
+                if action in [2, 3, 4]:  # any raise
+                    raise_count += 1
+
+            grid[i, j] = raise_count / n_samples
+
+    return grid
+
+
+def plot_hand_grid(grid, path="hand_grid.png"):
+    RANKS = "AKQJT98765432"
+    fig, ax = plt.subplots(figsize=(10, 9))
+
+    im = ax.imshow(grid, vmin=0, vmax=1, cmap="RdYlGn")
+    plt.colorbar(im, ax=ax, label="Raise frequency")
+
+    # labels
+    ax.set_xticks(range(13))
+    ax.set_yticks(range(13))
+    ax.set_xticklabels(list(RANKS), fontsize=11)
+    ax.set_yticklabels(list(RANKS), fontsize=11)
+
+    # cell text
+    for i in range(13):
+        for j in range(13):
+            # label type: pair, suited, offsuit
+            if i == j:
+                label = f"{RANKS[i]}{RANKS[j]}"
+            elif i < j:
+                label = f"{RANKS[i]}{RANKS[j]}s"
+            else:
+                label = f"{RANKS[j]}{RANKS[i]}o"
+
+            ax.text(
+                j, i,
+                f"{label}\n{grid[i,j]:.0%}",
+                ha="center", va="center",
+                fontsize=6.5,
+                color="black"
+            )
+
+    ax.set_title(
+        "Agent Preflop Raise Frequency\n"
+        "Upper triangle = suited | Lower = offsuit | Diagonal = pairs",
+        fontsize=12
+    )
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    print(f"Saved hand grid to {path}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--hands", type=int, default=1000)
