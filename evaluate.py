@@ -234,6 +234,9 @@ def main():
     fig.savefig("poker_results.png", dpi=160)
     print("Saved plot to poker_results.png")
 
+    print("\nGenerating preflop hand strength grid...")
+    grid = hand_strength_grid(model, n_samples=50)
+    plot_hand_grid(grid)
 
 if __name__ == "__main__":
     main()
