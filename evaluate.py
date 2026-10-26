@@ -158,7 +158,7 @@ def plot_hand_grid(grid, path="hand_grid.png"):
     fig.savefig(path, dpi=160)
     print(f"Saved hand grid to {path}")
 
-```def position_awareness_test(model, n_samples=200):
+def position_awareness_test(model, n_samples=200):
     test_hands = [
         ("AA",  ["SA", "HA"]),
         ("KK",  ["SK", "HK"]),
@@ -245,7 +245,7 @@ def plot_position_awareness(results, path="position_awareness.png"):
 
     fig.tight_layout()
     fig.savefig(path, dpi=160)
-    print(f"Saved to {path}")```
+    print(f"Saved to {path}")
 
 
 def main():
