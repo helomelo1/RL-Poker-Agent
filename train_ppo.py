@@ -15,8 +15,8 @@ import torch.optim as optim
 from torch.distributions import Categorical
 
 from opponents import CallingStation, RandomOpponent, RuleBasedOpponent
-from poker_env import NUM_ACTIONS, PokerEnv
-from state import STATE_SIZE
+from poker_env import NUM_ACTIONS, PokerEnv, STARTING_STACK
+from state import STATE_SIZE, encode_state
 
 
 class ActorCritic(nn.Module):
@@ -40,6 +40,47 @@ class ActorCritic(nn.Module):
         values = self.value(features).squeeze(-1)
 
         return logits, values
+
+
+class SavedAgentOpponent:
+    """Uses a saved PPO checkpoint as an opponent."""
+
+    name = "saved_agent"
+
+    def __init__(self, path, device="cpu"):
+        checkpoint = torch.load(path, map_location=device, weights_only=True)
+        self.model = ActorCritic()
+        self.model.load_state_dict(checkpoint["model_state_dict"])
+        self.model.eval()
+        self.device = device
+
+    def __call__(self, observation):
+        raw    = observation["raw_obs"]
+        stakes = raw["stakes"]
+
+        state = encode_state(
+            hole_cards=raw["hand"],
+            community_cards=raw["public_cards"],
+            is_button=False,
+            pot=float(raw["pot"]),
+            my_chips=float(stakes[1]),
+            opponent_chips=float(stakes[0]),
+            to_call=float(max(raw["all_chips"]) - raw["my_chips"]),
+            starting_stack=STARTING_STACK,
+        )
+
+        legal  = list(observation["legal_actions"])
+        mask   = np.zeros(NUM_ACTIONS, dtype=bool)
+        for a in legal:
+            mask[int(a)] = True
+
+        obs_t  = torch.as_tensor(state, dtype=torch.float32).unsqueeze(0)
+        mask_t = torch.as_tensor(mask,  dtype=torch.bool).unsqueeze(0)
+
+        with torch.no_grad():
+            logits, _ = self.model(obs_t)
+            return masked_distribution(logits, mask_t).sample().item()
+
 
 
 def masked_distribution(logits, masks):
@@ -205,6 +246,13 @@ def main():
     parser.add_argument("--updates", type=int, default=200)
     parser.add_argument("--hands-per-update", type=int, default=128)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--vs-saved",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Also train against a saved checkpoint, e.g. --vs-saved poker_ppo.pt",
+    )
     args = parser.parse_args()
 
     if args.updates < 1 or args.hands_per_update < 1:
@@ -225,6 +273,9 @@ def main():
         RuleBasedOpponent(seed=args.seed + 4),
         RuleBasedOpponent(seed=args.seed + 5),
     ]
+    if args.vs_saved:
+        opponents.append(SavedAgentOpponent(args.vs_saved))
+        print(f"Added saved-agent opponent from: {args.vs_saved}")
     env = PokerEnv(seed=args.seed)
     model = ActorCritic().to(device)
     optimizer = optim.Adam(model.parameters(), lr=3e-4)
@@ -252,14 +303,16 @@ def main():
     finally:
         env.close()
 
+    save_path = "poker_ppo_selfplay.pt" if args.vs_saved else "poker_ppo.pt"
+
     torch.save({
         "model_state_dict": model.state_dict(),
         "state_size": STATE_SIZE,
         "num_actions": NUM_ACTIONS,
         "updates": args.updates,
         "seed": args.seed,
-    }, "poker_ppo.pt")
-    print("Saved trained model to poker_ppo.pt")
+    }, save_path)
+    print(f"Saved trained model to {save_path}")
 
 
 if __name__ == "__main__":
