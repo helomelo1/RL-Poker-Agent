@@ -6,10 +6,9 @@ import numpy as np
 import torch
 
 from opponents import CallingStation, RandomOpponent, RuleBasedOpponent
-import opponents
 from poker_env import PokerEnv
 from state import STATE_SIZE, encode_state
-from train_ppo import ActorCritic, masked_distribution
+from train_ppo import ActorCritic, masked_distribution, SavedAgentOpponent
 
 
 def evaluate(model, opponent, hands, seed):
@@ -248,6 +247,109 @@ def plot_position_awareness(results, path="position_awareness.png"):
     print(f"Saved to {path}")
 
 
+def bet_sizing_distribution(model, n_samples=200):
+    hand_buckets = {
+        "Trash\n(72o,83o)":      [["D7", "H2"], ["C8", "S3"]],
+        "Weak\n(J5o,T6o)":       [["HJ", "D5"], ["CT", "S6"]],
+        "Playable\n(KTo,QJo)":   [["SK", "HT"], ["DQ", "CJ"]],
+        "Strong\n(AKo,AQo)":     [["SA", "HK"], ["DA", "CQ"]],
+        "Premium\n(AA,KK,QQ)":   [["SA", "HA"], ["SK", "HK"]],
+    }
+
+    results = {}
+
+    for bucket_name, hands in hand_buckets.items():
+        counts = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0}  # all 5 actions
+        total = 0
+
+        for hole_cards in hands:
+            for _ in range(n_samples):
+                state = encode_state(
+                    hole_cards=hole_cards,
+                    community_cards=[],
+                    is_button=True,
+                    pot=3.0,
+                    my_chips=99.0,
+                    opponent_chips=98.0,
+                    to_call=1.0,
+                    starting_stack=100.0,
+                )
+                obs = torch.as_tensor(
+                    state, dtype=torch.float32
+                ).unsqueeze(0)
+                mask = torch.ones(5, dtype=torch.bool).unsqueeze(0)
+
+                with torch.no_grad():
+                    logits, _ = model(obs)
+                    dist = masked_distribution(logits, mask)
+                    action = dist.sample().item()
+
+                counts[action] += 1
+                total += 1
+
+        results[bucket_name] = {
+            "fold":      counts[0] / total * 100,
+            "call":      counts[1] / total * 100,
+            "half_pot":  counts[2] / total * 100,
+            "pot":       counts[3] / total * 100,
+            "all_in":    counts[4] / total * 100,
+        }
+
+        print(
+            f"{bucket_name.replace(chr(10), ' '):25} | "
+            f"fold={results[bucket_name]['fold']:.0f}% | "
+            f"call={results[bucket_name]['call']:.0f}% | "
+            f"half_pot={results[bucket_name]['half_pot']:.0f}% | "
+            f"pot={results[bucket_name]['pot']:.0f}% | "
+            f"all_in={results[bucket_name]['all_in']:.0f}%"
+        )
+
+    return results
+
+
+def plot_bet_sizing(results, path="bet_sizing.png"):
+    names = list(results.keys())
+    fold     = [results[n]["fold"]     for n in names]
+    call     = [results[n]["call"]     for n in names]
+    half_pot = [results[n]["half_pot"] for n in names]
+    pot      = [results[n]["pot"]      for n in names]
+    all_in   = [results[n]["all_in"]   for n in names]
+
+    x = np.arange(len(names))
+    width = 0.15
+
+    fig, ax = plt.subplots(figsize=(13, 5))
+    b1 = ax.bar(x - 2*width, fold,     width, label="Fold",           color="gray")
+    b2 = ax.bar(x - width,   call,     width, label="Call",           color="steelblue")
+    b3 = ax.bar(x,           half_pot, width, label="Raise half-pot", color="mediumseagreen")
+    b4 = ax.bar(x + width,   pot,      width, label="Raise pot",      color="orange")
+    b5 = ax.bar(x + 2*width, all_in,   width, label="All-in",         color="crimson")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(names, fontsize=10)
+    ax.set_ylabel("Action Frequency (%)")
+    ax.set_title(
+        "Action Distribution by Hand Strength\n"
+        "Fold / Call / Raise Half-Pot / Raise Pot / All-in"
+    )
+    ax.legend()
+    ax.set_ylim(0, 110)
+
+    for bars in [b1, b2, b3, b4, b5]:
+        for rect in bars:
+            h = rect.get_height()
+            if h > 3:
+                ax.text(
+                    rect.get_x() + rect.get_width() / 2,
+                    h + 1, f"{h:.0f}%",
+                    ha="center", fontsize=7.5
+                )
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    print(f"Saved to {path}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--hands", type=int, default=1000)
@@ -257,7 +359,7 @@ def main():
     if args.hands < 1:
         parser.error("--hands must be positive")
 
-    checkpoint = torch.load("poker_ppo.pt", map_location="cpu", weights_only=True)
+    checkpoint = torch.load("poker_ppo_selfplay.pt", map_location="cpu", weights_only=True)
     if checkpoint["state_size"] != STATE_SIZE:
         raise ValueError("Checkpoint and state encoder have different sizes")
 
@@ -269,6 +371,7 @@ def main():
         CallingStation(),
         RandomOpponent(seed=args.seed + 1),
         RuleBasedOpponent(seed=args.seed + 2),
+        SavedAgentOpponent("poker_ppo.pt"),
     ]
 
     names, chip_averages = [], []
@@ -327,9 +430,9 @@ def main():
     grid = hand_strength_grid(model, n_samples=50)
     plot_hand_grid(grid)
 
-    print("\nRunning position awareness test...")
-    position_results = position_awareness_test(model)
-    plot_position_awareness(position_results)
+    print("\nRunning bet sizing distribution test...")
+    sizing_results = bet_sizing_distribution(model)
+    plot_bet_sizing(sizing_results)
 
 if __name__ == "__main__":
-    main()
+    main(
