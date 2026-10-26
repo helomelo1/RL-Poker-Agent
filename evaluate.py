@@ -327,9 +327,9 @@ def main():
     grid = hand_strength_grid(model, n_samples=50)
     plot_hand_grid(grid)
 
-    ```print("\nRunning position awareness test...")
+    print("\nRunning position awareness test...")
     position_results = position_awareness_test(model)
-    plot_position_awareness(position_results)```
+    plot_position_awareness(position_results)
 
 if __name__ == "__main__":
     main()
