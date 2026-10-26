@@ -359,7 +359,7 @@ def main():
     if args.hands < 1:
         parser.error("--hands must be positive")
 
-    checkpoint = torch.load("poker_ppo_selfplay.pt", map_location="cpu", weights_only=True)
+    checkpoint = torch.load("poker_ppo.pt", map_location="cpu", weights_only=True)
     if checkpoint["state_size"] != STATE_SIZE:
         raise ValueError("Checkpoint and state encoder have different sizes")
 
@@ -371,7 +371,7 @@ def main():
         CallingStation(),
         RandomOpponent(seed=args.seed + 1),
         RuleBasedOpponent(seed=args.seed + 2),
-        SavedAgentOpponent("poker_ppo.pt"),
+        # SavedAgentOpponent("poker_ppo.pt"),
     ]
 
     names, chip_averages = [], []
