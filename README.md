@@ -26,10 +26,7 @@ python3 train_ppo.py --updates 200 --hands-per-update 128 --vs-saved poker_ppo.p
 
 ```bash
 # Evaluate the default checkpoint against three opponents
-python3 evaluate.py --hands 2000
-
-# Evaluate a specific checkpoint, including a saved agent opponent
-python3 evaluate.py --checkpoint poker_ppo_selfplay.pt --vs-saved poker_ppo.pt --hands 2000
+python3 evaluate.py --hands 10000
 ```
 
 ## Stack
