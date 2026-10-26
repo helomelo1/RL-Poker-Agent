@@ -8,7 +8,7 @@ import torch
 from opponents import CallingStation, RandomOpponent, RuleBasedOpponent
 import opponents
 from poker_env import PokerEnv
-from state import STATE_SIZE
+from state import STATE_SIZE, encode_state
 from train_ppo import ActorCritic, masked_distribution
 
 
@@ -158,6 +158,95 @@ def plot_hand_grid(grid, path="hand_grid.png"):
     fig.savefig(path, dpi=160)
     print(f"Saved hand grid to {path}")
 
+```def position_awareness_test(model, n_samples=200):
+    test_hands = [
+        ("AA",  ["SA", "HA"]),
+        ("KK",  ["SK", "HK"]),
+        ("AKs", ["SA", "SK"]),
+        ("QQ",  ["SQ", "HQ"]),
+        ("AKo", ["SA", "HK"]),
+        ("JTs", ["SJ", "ST"]),
+        ("72o", ["D7", "H2"]),
+        ("83o", ["C8", "S3"]),
+    ]
+
+    results = {}
+
+    for name, hole_cards in test_hands:
+        raise_btn, raise_nobtn = 0, 0
+
+        for _ in range(n_samples):
+            for is_button in [True, False]:
+                state = encode_state(
+                    hole_cards=hole_cards,
+                    community_cards=[],
+                    is_button=is_button,
+                    pot=3.0,
+                    my_chips=99.0,
+                    opponent_chips=98.0,
+                    to_call=1.0,
+                    starting_stack=100.0,
+                )
+                obs = torch.as_tensor(
+                    state, dtype=torch.float32
+                ).unsqueeze(0)
+                mask = torch.ones(5, dtype=torch.bool).unsqueeze(0)
+
+                with torch.no_grad():
+                    logits, _ = model(obs)
+                    dist = masked_distribution(logits, mask)
+                    action = dist.sample().item()
+
+                if action in [2, 3, 4]:
+                    if is_button:
+                        raise_btn += 1
+                    else:
+                        raise_nobtn += 1
+
+        results[name] = {
+            "button": raise_btn / n_samples,
+            "no_button": raise_nobtn / n_samples,
+        }
+        print(
+            f"{name:6} | "
+            f"button={raise_btn/n_samples:.0%} | "
+            f"no_button={raise_nobtn/n_samples:.0%} | "
+            f"diff={(raise_btn - raise_nobtn)/n_samples:+.0%}"
+        )
+
+    return results
+
+def plot_position_awareness(results, path="position_awareness.png"):
+    names = list(results.keys())
+    btn_vals = [results[n]["button"] * 100 for n in names]
+    nobtn_vals = [results[n]["no_button"] * 100 for n in names]
+
+    x = np.arange(len(names))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.bar(x - width/2, btn_vals, width, label="Button (in position)", color="steelblue")
+    ax.bar(x + width/2, nobtn_vals, width, label="No button (out of position)", color="salmon")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(names, fontsize=11)
+    ax.set_ylabel("Raise Frequency (%)")
+    ax.set_title("Position Awareness: Does Agent Raise More On The Button?")
+    ax.legend()
+    ax.set_ylim(0, 110)
+
+    for rect, val in zip(ax.patches, btn_vals + nobtn_vals):
+        ax.text(
+            rect.get_x() + rect.get_width() / 2,
+            rect.get_height() + 1,
+            f"{val:.0f}%",
+            ha="center", fontsize=9
+        )
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    print(f"Saved to {path}")```
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -237,6 +326,10 @@ def main():
     print("\nGenerating preflop hand strength grid...")
     grid = hand_strength_grid(model, n_samples=50)
     plot_hand_grid(grid)
+
+    ```print("\nRunning position awareness test...")
+    position_results = position_awareness_test(model)
+    plot_position_awareness(position_results)```
 
 if __name__ == "__main__":
     main()
